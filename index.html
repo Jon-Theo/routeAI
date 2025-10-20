@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RouteAI - Running Route Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        #map { height: 400px; }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <!-- Header -->
+        <header class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-gray-800 mb-2">RouteAI</h1>
+            <p class="text-gray-600">Generate perfect running routes with AI</p>
+        </header>
+
+        <!-- Main Content -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- Controls Panel -->
+            <div class="lg:col-span-1">
+                <div class="bg-white rounded-lg shadow-md p-6">
+                    <h2 class="text-xl font-semibold mb-4">Route Settings</h2>
+                    
+                    <!-- Start Location -->
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Start Location</label>
+                        <div class="flex gap-2">
+                            <input type="text" id="startLocation" placeholder="Enter address or city" 
+                                   class="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <button id="useMyLocation" class="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors">
+                                📍 My Location
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Distance -->
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">
+                            Distance: <span id="distanceValue">10</span> km
+                        </label>
+                        <input type="range" id="distanceSlider" min="1" max="50" value="10" 
+                               class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer">
+                    </div>
+
+                    <!-- Route Type -->
+                    <div class="mb-6">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Route Type</label>
+                        <div class="space-y-2">
+                            <label class="flex items-center">
+                                <input type="radio" name="routeType" value="loop" checked class="mr-2">
+                                <span>Loop</span>
+                            </label>
+                            <label class="flex items-center">
+                                <input type="radio" name="routeType" value="out-and-back" class="mr-2">
+                                <span>Out and Back</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Generate Button -->
+                    <button id="generateRoute" class="w-full bg-green-500 text-white py-3 px-4 rounded-md hover:bg-green-600 transition-colors font-medium">
+                        Generate Route
+                    </button>
+
+                    <!-- Loading Indicator -->
+                    <div id="loadingIndicator" class="hidden mt-4 text-center">
+                        <div class="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500"></div>
+                        <p class="text-sm text-gray-600 mt-2">Generating route...</p>
+                    </div>
+
+                    <!-- Error Message -->
+                    <div id="errorMessage" class="hidden mt-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
+                        <p id="errorText"></p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Map and Results -->
+            <div class="lg:col-span-2">
+                <!-- Map -->
+                <div class="bg-white rounded-lg shadow-md p-4 mb-6">
+                    <div id="map"></div>
+                </div>
+
+                <!-- Route Results -->
+                <div id="routeResults" class="hidden bg-white rounded-lg shadow-md p-6">
+                    <h3 class="text-lg font-semibold mb-4">Generated Routes</h3>
+                    <div id="routeList" class="space-y-3">
+                        <!-- Routes will be populated here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const ORS_API_KEY = (window.ENV && window.ENV.ORS_API_KEY) || '';
+        // Initialize map centered on Helsinki
+        const map = L.map('map').setView([60.1699, 24.9384], 12);
+        
+        // Add OpenStreetMap tiles (free, no authentication required)
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://openstreetmap.org">OpenStreetMap</a> contributors',
+            maxZoom: 19
+        }).addTo(map);
+
+        // Global variables
+        let currentLocation = null;
+        let currentRoutes = [];
+        let routeLayer = null;
+
+        // DOM elements
+        const startLocationInput = document.getElementById('startLocation');
+        const useMyLocationBtn = document.getElementById('useMyLocation');
+        const distanceSlider = document.getElementById('distanceSlider');
+        const distanceValue = document.getElementById('distanceValue');
+        const generateRouteBtn = document.getElementById('generateRoute');
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        const errorMessage = document.getElementById('errorMessage');
+        const errorText = document.getElementById('errorText');
+        const routeResults = document.getElementById('routeResults');
+        const routeList = document.getElementById('routeList');
+
+        // Event listeners
+        distanceSlider.addEventListener('input', (e) => {
+            distanceValue.textContent = e.target.value;
+        });
+
+        useMyLocationBtn.addEventListener('click', () => {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        currentLocation = [position.coords.latitude, position.coords.longitude];
+                        map.setView(currentLocation, 15);
+                        
+                        // Reverse geocoding via proxy
+                        fetch(`/api/geocode?type=reverse&lon=${currentLocation[1]}&lat=${currentLocation[0]}`)
+                            .then(response => response.json())
+                            .then(data => {
+                                if (data.features && data.features.length > 0) {
+                                    startLocationInput.value = data.features[0].properties.label;
+                                }
+                            })
+                            .catch(() => {
+                                startLocationInput.value = `${currentLocation[0].toFixed(4)}, ${currentLocation[1].toFixed(4)}`;
+                            });
+                    },
+                    (error) => {
+                        showError('Unable to get your location. Please enter an address manually.');
+                    }
+                );
+            } else {
+                showError('Geolocation is not supported by this browser.');
+            }
+        });
+
+        generateRouteBtn.addEventListener('click', generateRoute);
+
+        // Functions
+        function showError(message) {
+            errorText.textContent = message;
+            errorMessage.classList.remove('hidden');
+            setTimeout(() => {
+                errorMessage.classList.add('hidden');
+            }, 5000);
+        }
+
+        function showLoading() {
+            loadingIndicator.classList.remove('hidden');
+            generateRouteBtn.disabled = true;
+            generateRouteBtn.classList.add('opacity-50');
+        }
+
+        function hideLoading() {
+            loadingIndicator.classList.add('hidden');
+            generateRouteBtn.disabled = false;
+            generateRouteBtn.classList.remove('opacity-50');
+        }
+
+        async function generateRoute() {
+            try {
+                showLoading();
+                hideError();
+
+                // Get route parameters
+                const distance = parseInt(distanceSlider.value) * 1000; // Convert to meters
+                const routeType = document.querySelector('input[name="routeType"]:checked').value;
+                const startLocation = startLocationInput.value.trim();
+
+                if (!startLocation && !currentLocation) {
+                    throw new Error('Please enter a start location or use your current location.');
+                }
+
+                // If we have a start location text but no coordinates, geocode it
+                let startCoords = currentLocation;
+                if (startLocation && !currentLocation) {
+                    const geocodeResponse = await fetch(`/api/geocode?type=search&text=${encodeURIComponent(startLocation)}`);
+                    const geocodeData = await geocodeResponse.json();
+                    
+                    if (!geocodeData.features || geocodeData.features.length === 0) {
+                        throw new Error('Could not find the specified location. Please try a different address.');
+                    }
+                    
+                    startCoords = geocodeData.features[0].geometry.coordinates.reverse(); // ORS returns [lon, lat], Leaflet expects [lat, lon]
+                }
+
+                // Build round-trip request (loop) via POST. For out-and-back we simulate with fewer points.
+                const roundTripPoints = routeType === 'loop' ? 3 : 2;
+                const requestBody = {
+                    coordinates: [[startCoords[1], startCoords[0]]], // [lon, lat]
+                    options: {
+                        round_trip: {
+                            length: distance,
+                            points: roundTripPoints
+                        }
+                    }
+                };
+
+                let routeData;
+                try {
+                    const routeResponse = await fetch('/api/directions?profile=foot-walking', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(requestBody)
+                    });
+
+                    if (!routeResponse.ok) {
+                        let errorDetail = 'Route request failed.';
+                        try {
+                            const err = await routeResponse.json();
+                            errorDetail = err.error || err.message || JSON.stringify(err);
+                        } catch (_) {}
+                        throw new Error(errorDetail);
+                    }
+
+                    routeData = await routeResponse.json();
+                } catch (postError) {
+                    // Fallback: simple GET-based out-and-back to avoid CORS/preflight issues
+                    console.warn('POST round-trip failed, falling back to simple GET route:', postError);
+                    routeData = await generateSimpleOutAndBack(startCoords, distance);
+                }
+
+                if (!routeData.features || routeData.features.length === 0) {
+                    throw new Error('No route found. Try adjusting your distance or location.');
+                }
+
+                // Display the route
+                displayRoute(routeData.features[0]);
+
+            } catch (error) {
+                showError(error.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        // --- Helpers ---
+        function toRadians(deg) { return deg * Math.PI / 180; }
+        function toDegrees(rad) { return rad * 180 / Math.PI; }
+        // Compute destination given start lat/lon, distance in meters and bearing in degrees
+        function computeDestinationPoint(lat, lon, distanceMeters, bearingDeg) {
+            const R = 6371000; // meters
+            const δ = distanceMeters / R;
+            const θ = toRadians(bearingDeg);
+            const φ1 = toRadians(lat);
+            const λ1 = toRadians(lon);
+
+            const sinφ1 = Math.sin(φ1), cosφ1 = Math.cos(φ1);
+            const sinδ = Math.sin(δ), cosδ = Math.cos(δ);
+
+            const sinφ2 = sinφ1 * cosδ + cosφ1 * sinδ * Math.cos(θ);
+            const φ2 = Math.asin(sinφ2);
+            const y = Math.sin(θ) * sinδ * cosφ1;
+            const x = cosδ - sinφ1 * sinφ2;
+            const λ2 = λ1 + Math.atan2(y, x);
+
+            return [toDegrees(φ2), ((toDegrees(λ2) + 540) % 360) - 180];
+        }
+
+        async function fetchGeoJsonGET(profile, startLon, startLat, endLon, endLat) {
+            const url = `/api/directions?profile=${profile}`;
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ coordinates: [[startLon, startLat], [endLon, endLat]] })
+            });
+            if (!res.ok) {
+                let detail = 'GET directions failed.';
+                try { const err = await res.json(); detail = err.error || err.message || JSON.stringify(err); } catch (_) {}
+                throw new Error(detail);
+            }
+            return res.json();
+        }
+
+        // Fallback builder: create an out-and-back by routing to a computed point then back
+        async function generateSimpleOutAndBack(startCoords, totalDistanceMeters) {
+            const half = Math.max(500, Math.round(totalDistanceMeters / 2));
+            // Use a fixed bearing to spread routes; 45 degrees by default
+            const bearing = 45;
+            const [lat, lon] = [startCoords[0], startCoords[1]];
+            const [destLat, destLon] = computeDestinationPoint(lat, lon, half, bearing);
+
+            const leg1 = await fetchGeoJsonGET('foot-walking', lon, lat, destLon, destLat);
+            const leg2 = await fetchGeoJsonGET('foot-walking', destLon, destLat, lon, lat);
+
+            // Merge coordinates of both legs into a single LineString feature for display
+            const coords1 = leg1.features[0].geometry.coordinates;
+            const coords2 = leg2.features[0].geometry.coordinates;
+            const merged = {
+                type: 'Feature',
+                geometry: {
+                    type: 'LineString',
+                    coordinates: [...coords1, ...coords2]
+                },
+                properties: {
+                    summary: {
+                        distance: (leg1.features[0].properties.summary.distance + leg2.features[0].properties.summary.distance),
+                        duration: (leg1.features[0].properties.summary.duration + leg2.features[0].properties.summary.duration)
+                    }
+                }
+            };
+
+            return { type: 'FeatureCollection', features: [merged] };
+        }
+
+        function displayRoute(route) {
+            // Clear previous route
+            if (routeLayer) {
+                map.removeLayer(routeLayer);
+            }
+
+            // Create new route layer
+            routeLayer = L.geoJSON(route, {
+                style: {
+                    color: '#3B82F6',
+                    weight: 4,
+                    opacity: 0.8
+                }
+            }).addTo(map);
+
+            // Fit map to route
+            map.fitBounds(routeLayer.getBounds());
+
+            // Show route details
+            const distance = (route.properties.summary.distance / 1000).toFixed(2);
+            const duration = Math.round(route.properties.summary.duration / 60);
+
+            routeList.innerHTML = `
+                <div class="border border-gray-200 rounded-lg p-4">
+                    <div class="flex justify-between items-center mb-2">
+                        <h4 class="font-medium">Generated Route</h4>
+                        <span class="text-sm text-gray-500">${distance} km</span>
+                    </div>
+                    <div class="text-sm text-gray-600">
+                        <p>Estimated time: ${duration} minutes</p>
+                        <p>Route type: ${document.querySelector('input[name="routeType"]:checked').value}</p>
+                    </div>
+                </div>
+            `;
+
+            routeResults.classList.remove('hidden');
+        }
+
+        function hideError() {
+            errorMessage.classList.add('hidden');
+        }
+
+        // Proof of concept: Generate a hardcoded 10km loop on page load
+        window.addEventListener('load', async () => {
+            console.log('RouteAI loaded successfully!');
+            console.log('Ready to generate routes with OpenRouteService API');
+            
+            // Proof of concept: Generate a hardcoded 10km loop
+            try {
+                console.log('Generating proof of concept route...');
+                
+                // Helsinki coordinates
+                const helsinkiCoords = [60.1699, 24.9384];
+                
+                // Make a hardcoded API call to ORS for a 10km loop using round_trip POST
+                const response = await fetch('/api/directions?profile=foot-walking', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        coordinates: [[helsinkiCoords[1], helsinkiCoords[0]]],
+                        options: { round_trip: { length: 10000, points: 3 } }
+                    })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    console.log('ORS API Response:', data);
+                    if (data.features && data.features.length > 0) {
+                        displayRoute(data.features[0]);
+                    } else {
+                        console.log('No route features found in response');
+                    }
+                } else {
+                    console.error('API Error:', response.status, response.statusText);
+                }
+            } catch (error) {
+                console.error('Proof of concept error:', error);
+            }
+        });
+    </script>
+</body>
+</html>
