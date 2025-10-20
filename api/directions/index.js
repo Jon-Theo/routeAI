@@ -1,41 +1,58 @@
-const { createProxyMiddleware } = require('http-proxy-middleware');
+export const config = {
+  runtime: 'edge',
+};
 
-module.exports = async function handler(req, res) {
+export default async function handler(request) {
   // Enable CORS
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
+  const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+  };
+
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { status: 200, headers: corsHeaders });
   }
 
   const apiKey = process.env.ORS_API_KEY;
   if (!apiKey) {
-    return res.status(500).json({ error: 'Missing ORS_API_KEY environment variable' });
+    return new Response(JSON.stringify({ error: 'Missing ORS_API_KEY environment variable' }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    });
   }
 
   try {
-    const profile = req.query.profile || 'foot-walking';
-    const url = `https://api.openrouteservice.org/v2/directions/${profile}/geojson`;
+    const url = new URL(request.url);
+    const profile = url.searchParams.get('profile') || 'foot-walking';
+    const orsUrl = `https://api.openrouteservice.org/v2/directions/${profile}/geojson`;
     
-    const response = await fetch(url, {
+    const body = await request.text();
+    
+    const response = await fetch(orsUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': apiKey
       },
-      body: JSON.stringify(req.body)
+      body: body
     });
 
     const data = await response.text();
     
-    res.status(response.status)
-      .setHeader('Content-Type', response.headers.get('content-type') || 'application/json')
-      .send(data);
+    return new Response(data, {
+      status: response.status,
+      headers: {
+        ...corsHeaders,
+        'Content-Type': response.headers.get('content-type') || 'application/json'
+      }
+    });
       
   } catch (error) {
     console.error('Directions API error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    return new Response(JSON.stringify({ error: 'Internal server error' }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    });
   }
-};
+}

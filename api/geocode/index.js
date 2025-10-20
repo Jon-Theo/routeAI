@@ -1,37 +1,54 @@
-module.exports = async function handler(req, res) {
+export const config = {
+  runtime: 'edge',
+};
+
+export default async function handler(request) {
   // Enable CORS
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
+  const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+  };
+
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { status: 200, headers: corsHeaders });
   }
 
   const apiKey = process.env.ORS_API_KEY;
   if (!apiKey) {
-    return res.status(500).json({ error: 'Missing ORS_API_KEY environment variable' });
+    return new Response(JSON.stringify({ error: 'Missing ORS_API_KEY environment variable' }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    });
   }
 
   try {
-    const { type, lon, lat, text } = req.query;
+    const url = new URL(request.url);
+    const { type, lon, lat, text } = Object.fromEntries(url.searchParams);
     
-    let url;
+    let orsUrl;
     if (type === 'reverse') {
-      url = `https://api.openrouteservice.org/geocode/reverse?api_key=${apiKey}&point.lon=${lon}&point.lat=${lat}`;
+      orsUrl = `https://api.openrouteservice.org/geocode/reverse?api_key=${apiKey}&point.lon=${lon}&point.lat=${lat}`;
     } else {
-      url = `https://api.openrouteservice.org/geocode/search?api_key=${apiKey}&text=${encodeURIComponent(text || '')}`;
+      orsUrl = `https://api.openrouteservice.org/geocode/search?api_key=${apiKey}&text=${encodeURIComponent(text || '')}`;
     }
 
-    const response = await fetch(url);
+    const response = await fetch(orsUrl);
     const data = await response.text();
     
-    res.status(response.status)
-      .setHeader('Content-Type', response.headers.get('content-type') || 'application/json')
-      .send(data);
+    return new Response(data, {
+      status: response.status,
+      headers: {
+        ...corsHeaders,
+        'Content-Type': response.headers.get('content-type') || 'application/json'
+      }
+    });
       
   } catch (error) {
     console.error('Geocode API error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    return new Response(JSON.stringify({ error: 'Internal server error' }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    });
   }
-};
+}
