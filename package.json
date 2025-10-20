@@ -1,0 +1,10 @@
+{
+  "name": "routeai",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "description": "AI-powered running route generator",
+  "main": "index.html",
+  "scripts": {
+    "build": "echo 'No build step required'"
+  }
+}

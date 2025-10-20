@@ -1,4 +1,4 @@
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
@@ -36,4 +36,4 @@ export default async function handler(req, res) {
     console.error('Directions API error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
-}
+};
