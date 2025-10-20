@@ -1,28 +1,37 @@
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
+  // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-  if (req.method === 'OPTIONS') return res.status(204).end();
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
 
   const apiKey = process.env.ORS_API_KEY;
-  if (!apiKey) return res.status(500).json({ error: 'Missing ORS_API_KEY' });
+  if (!apiKey) {
+    return res.status(500).json({ error: 'Missing ORS_API_KEY environment variable' });
+  }
 
   try {
-    const { type } = req.query; // 'search' or 'reverse'
-    const base = 'https://api.openrouteservice.org/geocode';
+    const { type, lon, lat, text } = req.query;
+    
     let url;
     if (type === 'reverse') {
-      const { lon, lat } = req.query;
-      url = `${base}/reverse?api_key=${apiKey}&point.lon=${lon}&point.lat=${lat}`;
+      url = `https://api.openrouteservice.org/geocode/reverse?api_key=${apiKey}&point.lon=${lon}&point.lat=${lat}`;
     } else {
-      const { text } = req.query;
-      url = `${base}/search?api_key=${apiKey}&text=${encodeURIComponent(text || '')}`;
+      url = `https://api.openrouteservice.org/geocode/search?api_key=${apiKey}&text=${encodeURIComponent(text || '')}`;
     }
 
-    const upstream = await fetch(url);
-    const data = await upstream.text();
-    res.status(upstream.status).setHeader('Content-Type', upstream.headers.get('content-type') || 'application/json').send(data);
-  } catch (e) {
-    res.status(500).json({ error: e.message || 'Proxy error' });
+    const response = await fetch(url);
+    const data = await response.text();
+    
+    res.status(response.status)
+      .setHeader('Content-Type', response.headers.get('content-type') || 'application/json')
+      .send(data);
+      
+  } catch (error) {
+    console.error('Geocode API error:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 }
-

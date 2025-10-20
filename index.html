@@ -99,11 +99,10 @@
     </div>
 
     <script>
-        const ORS_API_KEY = (window.ENV && window.ENV.ORS_API_KEY) || '';
         // Initialize map centered on Helsinki
         const map = L.map('map').setView([60.1699, 24.9384], 12);
         
-        // Add OpenStreetMap tiles (free, no authentication required)
+        // Add OpenStreetMap tiles
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '&copy; <a href="https://openstreetmap.org">OpenStreetMap</a> contributors',
             maxZoom: 19
@@ -111,7 +110,6 @@
 
         // Global variables
         let currentLocation = null;
-        let currentRoutes = [];
         let routeLayer = null;
 
         // DOM elements
@@ -138,7 +136,7 @@
                         currentLocation = [position.coords.latitude, position.coords.longitude];
                         map.setView(currentLocation, 15);
                         
-                        // Reverse geocoding via proxy
+                        // Reverse geocoding to get address
                         fetch(`/api/geocode?type=reverse&lon=${currentLocation[1]}&lat=${currentLocation[0]}`)
                             .then(response => response.json())
                             .then(data => {
@@ -209,41 +207,29 @@
                     startCoords = geocodeData.features[0].geometry.coordinates.reverse(); // ORS returns [lon, lat], Leaflet expects [lat, lon]
                 }
 
-                // Build round-trip request (loop) via POST. For out-and-back we simulate with fewer points.
-                const roundTripPoints = routeType === 'loop' ? 3 : 2;
+                // Generate route using round-trip
                 const requestBody = {
                     coordinates: [[startCoords[1], startCoords[0]]], // [lon, lat]
                     options: {
                         round_trip: {
                             length: distance,
-                            points: roundTripPoints
+                            points: routeType === 'loop' ? 3 : 2
                         }
                     }
                 };
 
-                let routeData;
-                try {
-                    const routeResponse = await fetch('/api/directions?profile=foot-walking', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(requestBody)
-                    });
+                const routeResponse = await fetch('/api/directions?profile=foot-walking', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody)
+                });
 
-                    if (!routeResponse.ok) {
-                        let errorDetail = 'Route request failed.';
-                        try {
-                            const err = await routeResponse.json();
-                            errorDetail = err.error || err.message || JSON.stringify(err);
-                        } catch (_) {}
-                        throw new Error(errorDetail);
-                    }
-
-                    routeData = await routeResponse.json();
-                } catch (postError) {
-                    // Fallback: simple GET-based out-and-back to avoid CORS/preflight issues
-                    console.warn('POST round-trip failed, falling back to simple GET route:', postError);
-                    routeData = await generateSimpleOutAndBack(startCoords, distance);
+                if (!routeResponse.ok) {
+                    const errorData = await routeResponse.json();
+                    throw new Error(errorData.error || 'Route generation failed');
                 }
+
+                const routeData = await routeResponse.json();
 
                 if (!routeData.features || routeData.features.length === 0) {
                     throw new Error('No route found. Try adjusting your distance or location.');
@@ -257,75 +243,6 @@
             } finally {
                 hideLoading();
             }
-        }
-
-        // --- Helpers ---
-        function toRadians(deg) { return deg * Math.PI / 180; }
-        function toDegrees(rad) { return rad * 180 / Math.PI; }
-        // Compute destination given start lat/lon, distance in meters and bearing in degrees
-        function computeDestinationPoint(lat, lon, distanceMeters, bearingDeg) {
-            const R = 6371000; // meters
-            const δ = distanceMeters / R;
-            const θ = toRadians(bearingDeg);
-            const φ1 = toRadians(lat);
-            const λ1 = toRadians(lon);
-
-            const sinφ1 = Math.sin(φ1), cosφ1 = Math.cos(φ1);
-            const sinδ = Math.sin(δ), cosδ = Math.cos(δ);
-
-            const sinφ2 = sinφ1 * cosδ + cosφ1 * sinδ * Math.cos(θ);
-            const φ2 = Math.asin(sinφ2);
-            const y = Math.sin(θ) * sinδ * cosφ1;
-            const x = cosδ - sinφ1 * sinφ2;
-            const λ2 = λ1 + Math.atan2(y, x);
-
-            return [toDegrees(φ2), ((toDegrees(λ2) + 540) % 360) - 180];
-        }
-
-        async function fetchGeoJsonGET(profile, startLon, startLat, endLon, endLat) {
-            const url = `/api/directions?profile=${profile}`;
-            const res = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ coordinates: [[startLon, startLat], [endLon, endLat]] })
-            });
-            if (!res.ok) {
-                let detail = 'GET directions failed.';
-                try { const err = await res.json(); detail = err.error || err.message || JSON.stringify(err); } catch (_) {}
-                throw new Error(detail);
-            }
-            return res.json();
-        }
-
-        // Fallback builder: create an out-and-back by routing to a computed point then back
-        async function generateSimpleOutAndBack(startCoords, totalDistanceMeters) {
-            const half = Math.max(500, Math.round(totalDistanceMeters / 2));
-            // Use a fixed bearing to spread routes; 45 degrees by default
-            const bearing = 45;
-            const [lat, lon] = [startCoords[0], startCoords[1]];
-            const [destLat, destLon] = computeDestinationPoint(lat, lon, half, bearing);
-
-            const leg1 = await fetchGeoJsonGET('foot-walking', lon, lat, destLon, destLat);
-            const leg2 = await fetchGeoJsonGET('foot-walking', destLon, destLat, lon, lat);
-
-            // Merge coordinates of both legs into a single LineString feature for display
-            const coords1 = leg1.features[0].geometry.coordinates;
-            const coords2 = leg2.features[0].geometry.coordinates;
-            const merged = {
-                type: 'Feature',
-                geometry: {
-                    type: 'LineString',
-                    coordinates: [...coords1, ...coords2]
-                },
-                properties: {
-                    summary: {
-                        distance: (leg1.features[0].properties.summary.distance + leg2.features[0].properties.summary.distance),
-                        duration: (leg1.features[0].properties.summary.duration + leg2.features[0].properties.summary.duration)
-                    }
-                }
-            };
-
-            return { type: 'FeatureCollection', features: [merged] };
         }
 
         function displayRoute(route) {
@@ -370,43 +287,8 @@
             errorMessage.classList.add('hidden');
         }
 
-        // Proof of concept: Generate a hardcoded 10km loop on page load
-        window.addEventListener('load', async () => {
-            console.log('RouteAI loaded successfully!');
-            console.log('Ready to generate routes with OpenRouteService API');
-            
-            // Proof of concept: Generate a hardcoded 10km loop
-            try {
-                console.log('Generating proof of concept route...');
-                
-                // Helsinki coordinates
-                const helsinkiCoords = [60.1699, 24.9384];
-                
-                // Make a hardcoded API call to ORS for a 10km loop using round_trip POST
-                const response = await fetch('/api/directions?profile=foot-walking', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        coordinates: [[helsinkiCoords[1], helsinkiCoords[0]]],
-                        options: { round_trip: { length: 10000, points: 3 } }
-                    })
-                });
-                
-                if (response.ok) {
-                    const data = await response.json();
-                    console.log('ORS API Response:', data);
-                    if (data.features && data.features.length > 0) {
-                        displayRoute(data.features[0]);
-                    } else {
-                        console.log('No route features found in response');
-                    }
-                } else {
-                    console.error('API Error:', response.status, response.statusText);
-                }
-            } catch (error) {
-                console.error('Proof of concept error:', error);
-            }
-        });
+        // Initialize
+        console.log('RouteAI loaded successfully!');
     </script>
 </body>
 </html>
