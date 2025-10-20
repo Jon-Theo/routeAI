@@ -1,3 +1,5 @@
+const { createProxyMiddleware } = require('http-proxy-middleware');
+
 module.exports = async function handler(req, res) {
   // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');

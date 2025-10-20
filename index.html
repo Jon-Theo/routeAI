@@ -137,7 +137,7 @@
                         map.setView(currentLocation, 15);
                         
                         // Reverse geocoding to get address
-                        fetch(`https://api.openrouteservice.org/geocode/reverse?api_key=YOUR_API_KEY&point.lon=${currentLocation[1]}&point.lat=${currentLocation[0]}`)
+                        fetch(`/api/geocode?type=reverse&lon=${currentLocation[1]}&lat=${currentLocation[0]}`)
                             .then(response => response.json())
                             .then(data => {
                                 if (data.features && data.features.length > 0) {
@@ -197,7 +197,7 @@
                 // If we have a start location text but no coordinates, geocode it
                 let startCoords = currentLocation;
                 if (startLocation && !currentLocation) {
-                    const geocodeResponse = await fetch(`https://api.openrouteservice.org/geocode/search?api_key=YOUR_API_KEY&text=${encodeURIComponent(startLocation)}`);
+                    const geocodeResponse = await fetch(`/api/geocode?type=search&text=${encodeURIComponent(startLocation)}`);
                     const geocodeData = await geocodeResponse.json();
                     
                     if (!geocodeData.features || geocodeData.features.length === 0) {
@@ -218,12 +218,9 @@
                     }
                 };
 
-                const routeResponse = await fetch('https://api.openrouteservice.org/v2/directions/foot-walking/geojson', {
+                const routeResponse = await fetch('/api/directions?profile=foot-walking', {
                     method: 'POST',
-                    headers: { 
-                        'Content-Type': 'application/json',
-                        'Authorization': 'YOUR_API_KEY'
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(requestBody)
                 });
 
